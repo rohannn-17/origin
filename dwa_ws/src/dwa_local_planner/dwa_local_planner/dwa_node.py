@@ -45,12 +45,12 @@ class DWALocalPlanner(Node):
         self.goal_reached_thresh = 0.05
 
         # Robot limits
-        self.max_v = 0.15
+        self.max_v = 0.2
         self.min_v = 0.0
         self.max_w = 2.0
 
         self.max_acc_v = 0.5
-        self.max_acc_w = 2.0
+        self.max_acc_w = 5.0
 
         # DWA sampling
         self.v_samples = 6
@@ -72,6 +72,9 @@ class DWALocalPlanner(Node):
         self.linear_history = deque(maxlen=16)   # recent linear commands
         self.oscillation_detected = False
 
+        self.path_points = []
+        self.path_marker_id = 1
+
         # Rotation-then-move state
         self.need_rotate_then_move = False
         self.rotate_target_yaw = None
@@ -89,6 +92,46 @@ class DWALocalPlanner(Node):
 
     def scan_callback(self, msg):
         self.scan = msg
+
+    # -------------------- Path History --------------------
+    def publish_path_history(self, x, y):
+        """
+        Publishes a persistent LINE_STRIP marker showing robot path history.
+        """
+
+        # Store new point
+        self.path_points.append((x, y))
+
+        # Optional: limit memory size (keep last 2000 points)
+        if len(self.path_points) > 2000:
+            self.path_points.pop(0)
+
+        marker = Marker()
+        marker.header.frame_id = "odom"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "robot_path"
+        marker.id = self.path_marker_id
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+
+        marker.scale.x = 0.03  # thickness
+
+        marker.color.a = 1.0
+        marker.color.r = 1.0
+        marker.color.g = 0.2
+        marker.color.b = 0.2
+
+        for px, py in self.path_points:
+            pt = Point()
+            pt.x = float(px)
+            pt.y = float(py)
+            pt.z = 0.0
+            marker.points.append(pt)
+
+        self.marker_pub.publish(marker)
+
+    
+
 
     # -------------------- Main Control Loop --------------------
 
@@ -207,6 +250,7 @@ class DWALocalPlanner(Node):
                 cmd.angular.z = math.copysign(0.8, angle_diff)
 
         self.cmd_vel_pub.publish(cmd)
+        self.publish_path_history(x, y)
 
     # -------------------- Helpers (DWA) --------------------
 
