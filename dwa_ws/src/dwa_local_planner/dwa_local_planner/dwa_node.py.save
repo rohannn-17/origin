@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+
+import math
+import numpy as np
+
+import rclpy
+from rclpy.node import Node
+
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
+from visualization_msgs.msg import Marker
+from tf_transformations import euler_from_quaternion
+
+
+class DWALocalPlanner(Node):
+
+    def __init__(self):
+        super().__init__('dwa_local_planner')
+
+        # Publishers
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.marker_pub = self.create_publisher(Marker, '/dwa_trajectories', 10)
+
+        # Subscribers
+        self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
+
+        # Control loop
+        self.dt = 0.1
+        self.timer = self.create_timer(self.dt, self.control_loop)
+
+        # Robot state
+        self.odom = None
+        self.scan = None
+
+        # Goal (fixed for assignment demo)
+        self.goal_x = 2.0
+        self.goal_y = 0.0
+
+        # Robot limits (TurtleBot3 Burger)
+        self.max_v = 0.22
+        self.min_v = 0.0
+        self.max_w = 2.84
+
+        self.max_acc_v = 0.5
+        self.max_acc_w = 2.0
+
+        # DWA parameters
+        self.v_samples = 8
+        self.w_samples = 16
+        self.predict_time = 2.0
+
+        # Cost weights
+        self.w_goal = 1.0
+        self.w_obs = 1.5
+        self.w_smooth = 0.2
+
+        self.get_logger().info('Custom DWA Local Planner started')
+
+    def odom_callback(self, msg):
+        self.odom = msg
+
+    def scan_callback(self, msg):
+        self.scan = msg
+
+    def control_loop(self):
+        if self.odom is None or self.scan is None:
+            return
+
+        x, y, yaw, v, w = self.get_state()
+        best_cmd = None
+        best_cost = float('inf')
+
+        trajectories = []
+
+        v_min, v_max, w_min, w_max = self.compute_dynamic_window(v, w)
+
+        for v_s in np.linspace(v_min, v_max, self.v_samples):
+            for w_s in np.linspace(w_min, w_max, self.w_samples):
+                traj = self.rollout_trajectory(x, y, yaw, v_s, w_s)
+                cost = self.evaluate_trajectory(traj, v_s, w_s)
+
+                trajectories.append(traj)
+
+                if cost < best_cost:
+                    best_cost = cost
+                    best_cmd = (v_s, w_s)
+
+        self.publish_trajectories(trajectories)
+
+        cmd = Twist()
+        if best_cmd is not None:
+            cmd.linear.x = float(best_cmd[0])
+            cmd.angular.z = float(best_cmd[1])
+
+        self.cmd_vel_pub.publish(cmd)
+
+    def get_state(self):
+        pos = self.odom.pose.pose.position
+        ori = self.odom.pose.pose.orientation
+        (_, _, yaw) = euler_from_quaternion([ori.x, ori.y, ori.z, ori.w])
+
+        v = self.odom.twist.twist.linear.x
+        w = self.odom.twist.twist.angular.z
+
+        return pos.x, pos.y, yaw, v, w
+
+    def compute_dynamic_window(self, v, w):
+        v_min = max(self.min_v, v - self.max_acc_v * self.dt)
+        v_max = min(self.max_v, v + self.max_acc_v * self.dt)
+
+        w_min = max(-self.max_w, w - self.max_acc_w * self.dt)
+        w_max = min(self.max_w, w + self.max_acc_w * self.dt)
+
+        return v_min, v_max, w_min, w_max
+
+    def rollout_trajectory(self, x, y, yaw, v, w):
+        traj = []
+        time = 0.0
+
+        while time <= self.predict_time:
+            x += v * math.cos(yaw) * self.dt
+            y += v * math.sin(yaw) * self.dt
+            yaw += w * self.dt
+            traj.append((x, y))
+            time += self.dt
+
+        return traj
+
+    def evaluate_trajectory(self, traj, v, w):
+        # Goal cost
+        last_x, last_y = traj[-1]
+        goal_cost = math.hypot(self.goal_x - last_x, self.goal_y - last_y)
+
+        # Obstacle cost
+        min_obs = self.compute_min_obstacle_distance(traj)
+        if min_obs <= 0.2:
+            return float('inf')
+        obs_cost = 1.0 / min_obs
+
+        # Smoothness cost
+        smooth_cost = abs(w)
+
+        return (
+            self.w_goal * goal_cost +
+            self.w_obs * obs_cost +
+            self.w_smooth * smooth_cost
+        )
+
+    def compute_min_obstacle_distance(self, traj):
+        ranges = np.array(self.scan.ranges)
+        ranges = ranges[np.isfinite(ranges)]
+
+        if len(ranges) == 0:
+            return float('inf')
+
+        return float(np.min(ranges))
+
+    def publish_trajectories(self, trajectories):
+        marker = Marker()
+        marker.header.frame_id = 'odom'
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'dwa'
+        marker.id = 0
+        marker.type = Marker.LINE_LIST
+        marker.action = Marker.ADD
+        marker.scale.x = 0.01
+        marker.color.a = 1.0
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+
+        for traj in trajectories:
+            for i in range(len(traj) - 1):
+                p1 = traj[i]
+                p2 = traj[i + 1]
+                marker.points.append(self.make_point(p1))
+                marker.points.append(self.make_point(p2))
+
+        self.marker_pub.publish(marker)
+
+    def make_point(self, p):
+        from geometry_msgs.msg import Point
+        pt = Point()
+        pt.x = float(p[0])
+        pt.y = float(p[1])
+        pt.z = 0.0
+        return pt
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = DWALocalPlanner()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    ma

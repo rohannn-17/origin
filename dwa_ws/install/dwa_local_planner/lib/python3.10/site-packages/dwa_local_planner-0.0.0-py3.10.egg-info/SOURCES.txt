@@ -1,0 +1,16 @@
+package.xml
+setup.cfg
+setup.py
+../../build/dwa_local_planner/dwa_local_planner.egg-info/PKG-INFO
+../../build/dwa_local_planner/dwa_local_planner.egg-info/SOURCES.txt
+../../build/dwa_local_planner/dwa_local_planner.egg-info/dependency_links.txt
+../../build/dwa_local_planner/dwa_local_planner.egg-info/entry_points.txt
+../../build/dwa_local_planner/dwa_local_planner.egg-info/requires.txt
+../../build/dwa_local_planner/dwa_local_planner.egg-info/top_level.txt
+../../build/dwa_local_planner/dwa_local_planner.egg-info/zip-safe
+dwa_local_planner/__init__.py
+dwa_local_planner/dwa_node.py
+resource/dwa_local_planner
+test/test_copyright.py
+test/test_flake8.py
+test/test_pep257.py
