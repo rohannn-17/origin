@@ -8,7 +8,7 @@ The planner must:
 
 - Sample velocity commands within dynamic constraints
 - Predict trajectories for each sampled velocity pair
-- Evaluate trajectories using a cost function:
+- Evaluate trajectories using a cost function based on:
   - Distance to goal
   - Obstacle avoidance
   - Path smoothness
